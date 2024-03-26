@@ -1,6 +1,7 @@
 pub mod colorings;
 pub mod gui;
 pub mod mandel_image;
+pub mod presets;
 
 use colorings::ColorFromMandel;
 use mandel_image::Mapping;

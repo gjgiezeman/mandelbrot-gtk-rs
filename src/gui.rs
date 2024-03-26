@@ -1,12 +1,13 @@
 use crate::colorings::ColorInfo;
 use crate::mandel_image::{make_mandel_image, Mapping, WinToMandel};
+use crate::presets::Presets;
 use crate::MandelReq;
 use gtk::cairo::ImageSurface;
 use gtk::ffi::GTK_INVALID_LIST_POSITION;
 use gtk::glib::{clone, WeakRef};
 use gtk::{
-    glib, prelude::*, Adjustment, Align, Application, ApplicationWindow, DrawingArea, DropDown,
-    Label, Orientation, Scale, SpinButton,
+    glib, prelude::*, Adjustment, Align, Application, ApplicationWindow, Button, DrawingArea,
+    DropDown, Label, Orientation, Scale, SpinButton, Window,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,6 +19,7 @@ struct State {
     mparams: Mapping,
     img: Option<ImageSurface>,
     col_idx: usize,
+    preset: Option<u8>,
     color_info: ColorInfo,
     canvas: WeakRef<DrawingArea>,
 }
@@ -28,6 +30,7 @@ impl State {
             mparams: Mapping::new_for_size(WIN_SZ0 as usize),
             img: None,
             col_idx: 0,
+            preset: None,
             color_info: ColorInfo::new(),
             canvas: WeakRef::new(),
         }
@@ -117,6 +120,68 @@ fn col_changed(state: &mut State, dd: &DropDown) {
     }
 }
 
+fn preset_ready(
+    state: &Rc<RefCell<State>>,
+    cx_value: &gtk::Entry,
+    cy_value: &gtk::Entry,
+    zoom_adj: &Adjustment,
+    iter_adj: &Adjustment,
+    presets: &Presets,
+) {
+    let preset;
+    {
+        preset = state.borrow_mut().preset.take();
+    }
+
+    if let Some(preset) = preset {
+        let preset = presets.get(preset as usize);
+        let cx = preset.cx();
+        let cy = preset.cy();
+        cx_value.buffer().set_text(cx.to_string());
+        cy_value.buffer().set_text(cy.to_string());
+        zoom_adj.set_value(preset.zoom());
+        iter_adj.set_value(preset.iter_depth());
+    }
+}
+
+fn build_preset_window(state: &Rc<RefCell<State>>, presets: &Presets) -> Window {
+    let preset_dropdown = DropDown::from_strings(presets.names());
+    preset_dropdown.set_margin_top(10);
+    preset_dropdown.set_margin_start(10);
+    preset_dropdown.set_margin_end(10);
+    let cancel_btn = Button::builder().label("Cancel").build();
+    let ok_btn = Button::builder().label("Apply").margin_start(10).build();
+    let ready_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .margin_top(10)
+        .margin_start(10)
+        .margin_bottom(10)
+        .margin_end(10)
+        .build();
+    ready_box.append(&cancel_btn);
+    ready_box.append(&ok_btn);
+    let content_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    content_box.append(&preset_dropdown);
+    content_box.append(&ready_box);
+    let win = Window::builder()
+        .modal(true)
+        .decorated(false)
+        .child(&content_box)
+        .build();
+    cancel_btn.connect_clicked(clone!(@weak win, @strong state => move |_| {
+        state.borrow_mut().preset=None;
+        win.set_visible(false);
+    }));
+    ok_btn.connect_clicked(clone!(@weak win, @strong state => move |_| {
+        let sel = preset_dropdown.selected();
+        state.borrow_mut().preset=Some(sel as u8);
+        win.set_visible(false);
+    }));
+    win
+}
+
 fn make_row_box() -> gtk::Box {
     gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -132,6 +197,10 @@ fn build_ui(app: &Application) {
     colors.set_hexpand(false);
     colors.set_halign(Align::Start);
     colors.set_margin_end(15);
+    let preset_btn = Button::builder()
+        .label("Choose Preset")
+        .halign(Align::End)
+        .build();
     let iter_adj = Adjustment::new(100.0, 10.0, 1000.0, 1.0, 0.0, 0.0);
     let iteration_button = SpinButton::builder()
         .adjustment(&iter_adj)
@@ -143,6 +212,7 @@ fn build_ui(app: &Application) {
     first_row.append(&colors);
     first_row.append(&Label::new(Some("max iterations:")));
     first_row.append(&iteration_button);
+    first_row.append(&preset_btn);
     let cx_value = gtk::Entry::builder()
         .text(&state.borrow().mparams.cx.to_string())
         .width_chars(10)
@@ -200,7 +270,17 @@ fn build_ui(app: &Application) {
         .child(&content_box)
         .build();
 
+    let presets = Presets::new();
+    let preset_window = build_preset_window(&state, &presets);
+    preset_window.set_transient_for(Some(&window));
+    preset_window.connect_hide(
+        clone!(@strong state, @weak zoom_adj, @weak iter_adj, @weak cx_value, @weak cy_value =>
+            move|_w| preset_ready(&state, &cx_value, &cy_value, &zoom_adj, &iter_adj, &presets)),
+    );
+
     // Add the actions to the widgets
+    preset_btn
+        .connect_clicked(clone!(@strong preset_window => move |_btn| preset_window.present();));
 
     // Color_producer
     colors.connect_selected_notify(clone!(@strong state => move |dd| {
