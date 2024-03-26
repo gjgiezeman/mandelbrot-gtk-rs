@@ -100,11 +100,15 @@ pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
     iter
 }
 
-fn color_from_mandel(mv: u32) -> u32 {
-    if mv % 2 == 0 {
-        0
+fn color_from_mandel(mv: u32, max: u32) -> u32 {
+    if mv == max {
+        0x808080
     } else {
-        0xffffff
+        if mv % 2 == 0 {
+            0
+        } else {
+            0xffffff
+        }
     }
 }
 
@@ -121,7 +125,7 @@ fn fill_mandel_image(data: &mut [u8], ustride: usize, mparams: &Mapping) {
             for wx in 0..w {
                 let x = converter.cvt_x(wx);
                 let mv = mandel_value(x, y, max);
-                let color = color_from_mandel(mv);
+                let color = color_from_mandel(mv, max);
                 let bytes = color.to_ne_bytes();
                 for i in 0..bytes.len() {
                     if let Some(v) = iter.next() {

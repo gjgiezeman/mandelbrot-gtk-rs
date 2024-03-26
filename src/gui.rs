@@ -1,4 +1,4 @@
-use crate::mandel_image::{make_mandel_image, Mapping};
+use crate::mandel_image::{make_mandel_image, Mapping, WinToMandel};
 use gtk::cairo::ImageSurface;
 use gtk::glib::{clone, WeakRef};
 use gtk::{
@@ -24,6 +24,10 @@ impl State {
             img: None,
             canvas: WeakRef::new(),
         }
+    }
+
+    fn win_to_mandel(&self, wx: f64, wy: f64) -> (f64, f64) {
+        WinToMandel::from_mapping(&self.mparams).cvt(wx as usize, wy as usize)
     }
 }
 
@@ -69,6 +73,14 @@ fn on_resize(state: &Rc<RefCell<State>>, _da: &DrawingArea, w: i32, h: i32) {
         s.mparams.win_height = h as usize;
         recompute_image(&mut s);
     }
+}
+
+fn on_click(state: &Rc<RefCell<State>>, wx: f64, wy: f64) -> (f64, f64) {
+    let mut state = state.borrow_mut();
+    let (cx, cy) = state.win_to_mandel(wx, wy);
+    state.mparams.cx = cx;
+    state.mparams.cy = cy;
+    (cx, cy)
 }
 
 fn zoom_changed(state: &mut State, adj: &Adjustment) {
@@ -187,6 +199,19 @@ fn build_ui(app: &Application) {
             recompute_image(&mut s);
         }
     }));
+    // Click for new center
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32);
+    {
+        let state = state.clone();
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let (new_cx, new_cy) = on_click(&state, x, y);
+            cx_value.set_text(&new_cx.to_string());
+            cy_value.set_text(&new_cy.to_string());
+        });
+    }
+    canvas.add_controller(gesture);
 
     canvas.connect_resize(clone!(@strong state => move |d, w, h| on_resize(&state, d, w, h)));
 
