@@ -1,27 +1,34 @@
+use crate::colorings::ColorInfo;
 use crate::mandel_image::{make_mandel_image, Mapping, WinToMandel};
+use crate::MandelReq;
 use gtk::cairo::ImageSurface;
+use gtk::ffi::GTK_INVALID_LIST_POSITION;
 use gtk::glib::{clone, WeakRef};
 use gtk::{
-    glib, prelude::*, Adjustment, Align, Application, ApplicationWindow, DrawingArea, Label,
-    Orientation, Scale, SpinButton,
+    glib, prelude::*, Adjustment, Align, Application, ApplicationWindow, DrawingArea, DropDown,
+    Label, Orientation, Scale, SpinButton,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
 
 const APP_ID: &str = "nl.uu.gjgiezeman.mandelbrot";
-const WIN_SZ0: usize = 600;
+const WIN_SZ0: i32 = 600;
 
 struct State {
     mparams: Mapping,
     img: Option<ImageSurface>,
+    col_idx: usize,
+    color_info: ColorInfo,
     canvas: WeakRef<DrawingArea>,
 }
 
 impl State {
     fn new() -> State {
         State {
-            mparams: Mapping::new_for_size(WIN_SZ0),
+            mparams: Mapping::new_for_size(WIN_SZ0 as usize),
             img: None,
+            col_idx: 0,
+            color_info: ColorInfo::new(),
             canvas: WeakRef::new(),
         }
     }
@@ -62,7 +69,12 @@ fn handle_new_image(reply: Option<ImageSurface>, state: &mut State) {
 }
 
 fn recompute_image(state: &mut State) {
-    let reply = make_mandel_image(&state.mparams);
+    let coloring = state.color_info.producer(state.col_idx);
+    let request = MandelReq {
+        params: state.mparams.clone(),
+        coloring,
+    };
+    let reply = make_mandel_image(&request);
     handle_new_image(reply, state);
 }
 
@@ -97,6 +109,14 @@ fn iter_depth_changed(state: &mut State, adj: &Adjustment) {
     recompute_image(state);
 }
 
+fn col_changed(state: &mut State, dd: &DropDown) {
+    let sel = dd.selected();
+    if sel != GTK_INVALID_LIST_POSITION {
+        state.col_idx = sel as usize;
+        recompute_image(state);
+    }
+}
+
 fn make_row_box() -> gtk::Box {
     gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -108,6 +128,10 @@ fn make_row_box() -> gtk::Box {
 
 fn build_ui(app: &Application) {
     let state = Rc::new(RefCell::new(State::new()));
+    let colors = DropDown::from_strings(state.borrow().color_info.color_names());
+    colors.set_hexpand(false);
+    colors.set_halign(Align::Start);
+    colors.set_margin_end(15);
     let iter_adj = Adjustment::new(100.0, 10.0, 1000.0, 1.0, 0.0, 0.0);
     let iteration_button = SpinButton::builder()
         .adjustment(&iter_adj)
@@ -115,6 +139,8 @@ fn build_ui(app: &Application) {
         .margin_end(15)
         .build();
     let first_row = make_row_box();
+    first_row.append(&Label::new(Some("coloring:")));
+    first_row.append(&colors);
     first_row.append(&Label::new(Some("max iterations:")));
     first_row.append(&iteration_button);
     let cx_value = gtk::Entry::builder()
@@ -139,8 +165,8 @@ fn build_ui(app: &Application) {
     third_row.append(&zoom_bar);
 
     let canvas = DrawingArea::builder()
-        .content_height(WIN_SZ0 as i32)
-        .content_width(WIN_SZ0 as i32)
+        .content_height(WIN_SZ0)
+        .content_width(WIN_SZ0)
         .vexpand(true)
         .can_target(true)
         .build();
@@ -175,6 +201,11 @@ fn build_ui(app: &Application) {
         .build();
 
     // Add the actions to the widgets
+
+    // Color_producer
+    colors.connect_selected_notify(clone!(@strong state => move |dd| {
+        col_changed(&mut state.borrow_mut(), dd);
+    }));
     // Zoom
     zoom_adj.connect_value_changed(clone!(@strong state => move |adj| {
         zoom_changed(&mut state.borrow_mut(), adj);
@@ -187,7 +218,7 @@ fn build_ui(app: &Application) {
     cx_value.connect_changed(clone!(@strong state => move |e| {
         if let Some(value) = expect_float_value(e) {
             let mut s = state.borrow_mut();
-            s.mparams.cx = value;
+            s.mparams.cx=value;
             recompute_image(&mut s);
         }
     }));
@@ -195,7 +226,7 @@ fn build_ui(app: &Application) {
     cy_value.connect_changed(clone!(@strong state => move |e| {
         if let Some(value) = expect_float_value(e) {
             let mut s = state.borrow_mut();
-            s.mparams.cy = value;
+            s.mparams.cy=value;
             recompute_image(&mut s);
         }
     }));

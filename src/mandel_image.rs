@@ -1,6 +1,6 @@
 use gtk::cairo::ImageSurface;
 
-use crate::IMG_FMT;
+use crate::{colorings::ColorFromMandel, MandelReq, IMG_FMT};
 
 #[derive(Clone)]
 /// Parameters for mapping from mandelbrot space to a window
@@ -59,6 +59,7 @@ The solution is:
 f = s
 x0 = x_c - (f*w)/2
 y0 = y_c - (f*h)/2
+
  */
 pub struct WinToMandel {
     x0: f64,
@@ -100,19 +101,12 @@ pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
     iter
 }
 
-fn color_from_mandel(mv: u32, max: u32) -> u32 {
-    if mv == max {
-        0x808080
-    } else {
-        if mv % 2 == 0 {
-            0
-        } else {
-            0xffffff
-        }
-    }
-}
-
-fn fill_mandel_image(data: &mut [u8], ustride: usize, mparams: &Mapping) {
+fn fill_mandel_image(
+    data: &mut [u8],
+    col_producer: &Box<dyn ColorFromMandel>,
+    ustride: usize,
+    mparams: &Mapping,
+) {
     {
         let converter = WinToMandel::from_mapping(mparams);
         let w = mparams.win_width;
@@ -125,7 +119,7 @@ fn fill_mandel_image(data: &mut [u8], ustride: usize, mparams: &Mapping) {
             for wx in 0..w {
                 let x = converter.cvt_x(wx);
                 let mv = mandel_value(x, y, max);
-                let color = color_from_mandel(mv, max);
+                let color = col_producer.get(mv, max);
                 let bytes = color.to_ne_bytes();
                 for i in 0..bytes.len() {
                     if let Some(v) = iter.next() {
@@ -137,15 +131,19 @@ fn fill_mandel_image(data: &mut [u8], ustride: usize, mparams: &Mapping) {
     }
 }
 
-pub fn make_mandel_image(params: &Mapping) -> Option<ImageSurface> {
-    if !params.is_valid() {
+pub fn make_mandel_image(request: &MandelReq) -> Option<ImageSurface> {
+    if !request.params.is_valid() {
         return None;
     }
-    let surface = ImageSurface::create(IMG_FMT, params.win_width as i32, params.win_height as i32);
+    let surface = ImageSurface::create(
+        IMG_FMT,
+        request.params.win_width as i32,
+        request.params.win_height as i32,
+    );
     if let Ok(mut surface) = surface {
         let ustride = surface.stride() as usize;
         if let Ok(mut data) = surface.data() {
-            fill_mandel_image(&mut data, ustride, &params);
+            fill_mandel_image(&mut data, &request.coloring, ustride, &request.params);
         }
         return Some(surface);
     }
