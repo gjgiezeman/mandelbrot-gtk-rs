@@ -1,5 +1,6 @@
 use crate::mandel_image::{make_mandel_image, Mapping};
 use gtk::cairo::ImageSurface;
+use gtk::glib::clone;
 use gtk::{glib, prelude::*, Application, ApplicationWindow, DrawingArea};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,9 +36,18 @@ fn mandel_draw(
     }
 }
 
-fn set_image(state: &mut State) {
+fn recompute_image(state: &mut State) {
     let img = make_mandel_image(&state.mparams);
     state.img = img;
+}
+
+fn on_resize(state: &Rc<RefCell<State>>, _da: &DrawingArea, w: i32, h: i32) {
+    {
+        let mut s = state.borrow_mut();
+        s.mparams.win_width = w as usize;
+        s.mparams.win_height = h as usize;
+        recompute_image(&mut s);
+    }
 }
 
 fn build_ui(app: &Application) {
@@ -68,7 +78,11 @@ fn build_ui(app: &Application) {
         .title("Mandelbrot")
         .child(&content_box)
         .build();
-    set_image(&mut state.borrow_mut());
+
+    // Add the actions to the widgets
+
+    canvas.connect_resize(clone!(@strong state => move |d, w, h| on_resize(&state, d, w, h)));
+
     window.present();
 }
 
