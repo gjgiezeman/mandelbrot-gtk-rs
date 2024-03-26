@@ -1,8 +1,9 @@
 [package]
 name = "mandelbrot"
-version = "6.1.0"
+version = "7.1.0"
 edition = "2021"
 
 [dependencies]
+async-channel = "2.2.0"
 dyn-clone = "1.0.17"
 gtk = { version = "0.8.0", package = "gtk4", features = ["v4_6"] }

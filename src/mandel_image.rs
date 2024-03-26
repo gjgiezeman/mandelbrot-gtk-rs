@@ -129,7 +129,7 @@ fn fill_mandel_image(
     }
 }
 
-fn make_mandel_image(request: &MandelReq) -> (Option<Vec<u8>>, i32) {
+fn make_mandel_image(request: &mut MandelReq) -> (Option<Vec<u8>>, i32) {
     if !request.params.is_valid() {
         return (None, 0);
     }
@@ -150,13 +150,44 @@ fn make_mandel_image(request: &MandelReq) -> (Option<Vec<u8>>, i32) {
     }
 }
 
-pub fn get_mandel_image(request: &MandelReq) -> MandelReply {
-    let (data, stride) = make_mandel_image(request);
-    let reply = MandelReply {
-        result: data,
-        width: request.params.win_width as i32,
-        height: request.params.win_height as i32,
-        stride: stride,
-    };
-    reply
+fn replace_by_last_request(
+    available: &mut Option<MandelReq>,
+    req_receiver: &async_channel::Receiver<MandelReq>,
+) {
+    loop {
+        // If there are multiple requests, throw away all but the last
+        match req_receiver.try_recv() {
+            Ok(new_req) => {
+                available.replace(new_req);
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+pub fn producer(
+    req_receiver: async_channel::Receiver<MandelReq>,
+    reply_sender: async_channel::Sender<MandelReply>,
+) {
+    let mut available = None;
+    loop {
+        if available.is_none() {
+            match req_receiver.recv_blocking() {
+                Err(_) => break,
+                Ok(request) => {
+                    available = Some(request);
+                }
+            }
+        }
+        replace_by_last_request(&mut available, &req_receiver);
+        // available is guaranteed to be is_some, hence unwrap is safe.
+        let mut request = available.take().unwrap();
+        let (data, stride) = make_mandel_image(&mut request);
+        let _ = reply_sender.send_blocking(MandelReply {
+            result: data,
+            width: request.params.win_width as i32,
+            height: request.params.win_height as i32,
+            stride: stride,
+        });
+    }
 }

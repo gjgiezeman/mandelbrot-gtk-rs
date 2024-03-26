@@ -1,12 +1,13 @@
 use crate::colorings::ColorInfo;
 use crate::image::Image;
-use crate::mandel_image::{get_mandel_image, Mapping, WinToMandel};
+use crate::mandel_image::{Mapping, WinToMandel};
 use crate::presets::Presets;
 use crate::{MandelReply, MandelReq, IMG_FMT};
+use async_channel::Receiver;
 use gtk::ffi::GTK_INVALID_LIST_POSITION;
 use gtk::glib::{clone, WeakRef};
 use gtk::{
-    glib, prelude::*, Adjustment, Align, Application, ApplicationWindow, Button, DrawingArea,
+    gio, glib, prelude::*, Adjustment, Align, Application, ApplicationWindow, Button, DrawingArea,
     DropDown, Label, Orientation, Scale, SpinButton, Window,
 };
 use std::cell::RefCell;
@@ -21,17 +22,19 @@ struct State {
     col_idx: usize,
     preset: Option<u8>,
     color_info: ColorInfo,
+    req_sender: async_channel::Sender<MandelReq>,
     canvas: WeakRef<DrawingArea>,
 }
 
 impl State {
-    fn new() -> State {
+    fn new(req_sender: async_channel::Sender<MandelReq>) -> State {
         State {
             mparams: Mapping::new_for_size(WIN_SZ0 as usize),
             img: None,
             col_idx: 0,
             preset: None,
             color_info: ColorInfo::new(),
+            req_sender,
             canvas: WeakRef::new(),
         }
     }
@@ -82,14 +85,13 @@ fn handle_new_image(reply: MandelReply, state: &mut State) {
     }
 }
 
-fn recompute_image(state: &mut State) {
+fn recompute_image(state: &State) {
     let coloring = state.color_info.producer(state.col_idx);
-    let request: MandelReq = MandelReq {
+    let request = MandelReq {
         params: state.mparams.clone(),
         coloring,
     };
-    let reply = get_mandel_image(&request);
-    handle_new_image(reply, state);
+    let _ = state.req_sender.send_blocking(request);
 }
 
 fn on_resize(state: &Rc<RefCell<State>>, _da: &DrawingArea, w: i32, h: i32) {
@@ -97,8 +99,8 @@ fn on_resize(state: &Rc<RefCell<State>>, _da: &DrawingArea, w: i32, h: i32) {
         let mut s = state.borrow_mut();
         s.mparams.win_width = w as usize;
         s.mparams.win_height = h as usize;
-        recompute_image(&mut s);
     }
+    recompute_image(&state.borrow());
 }
 
 fn on_click(state: &Rc<RefCell<State>>, wx: f64, wy: f64) -> (f64, f64) {
@@ -128,6 +130,12 @@ fn col_changed(state: &mut State, dd: &DropDown) {
     if sel != GTK_INVALID_LIST_POSITION {
         state.col_idx = sel as usize;
         recompute_image(state);
+    }
+}
+
+async fn new_image_handler(reply_receiver: Receiver<MandelReply>, state: Rc<RefCell<State>>) {
+    while let Ok(reply) = reply_receiver.recv().await {
+        handle_new_image(reply, &mut state.borrow_mut());
     }
 }
 
@@ -203,7 +211,11 @@ fn make_row_box() -> gtk::Box {
 }
 
 fn build_ui(app: &Application) {
-    let state = Rc::new(RefCell::new(State::new()));
+    let (req_sender, req_receiver) = async_channel::unbounded();
+    let (reply_sender, reply_receiver) = async_channel::bounded(1);
+    gio::spawn_blocking(move || crate::mandel_image::producer(req_receiver, reply_sender));
+
+    let state = Rc::new(RefCell::new(State::new(req_sender)));
     let colors = DropDown::from_strings(state.borrow().color_info.color_names());
     colors.set_hexpand(false);
     colors.set_halign(Align::Start);
@@ -308,17 +320,15 @@ fn build_ui(app: &Application) {
     // New horizontal center
     cx_value.connect_changed(clone!(@strong state => move |e| {
         if let Some(value) = expect_float_value(e) {
-            let mut s = state.borrow_mut();
-            s.mparams.cx=value;
-            recompute_image(&mut s);
+            state.borrow_mut().mparams.cx=value;
+            recompute_image(&state.borrow());
         }
     }));
     // New vertical center
     cy_value.connect_changed(clone!(@strong state => move |e| {
         if let Some(value) = expect_float_value(e) {
-            let mut s = state.borrow_mut();
-            s.mparams.cy=value;
-            recompute_image(&mut s);
+            state.borrow_mut().mparams.cy=value;
+            recompute_image(&state.borrow());
         }
     }));
     // Click for new center
@@ -337,6 +347,8 @@ fn build_ui(app: &Application) {
 
     canvas.connect_resize(clone!(@strong state => move |d, w, h| on_resize(&state, d, w, h)));
 
+    // Respond to new mandelbrot picture messages
+    glib::spawn_future_local(new_image_handler(reply_receiver, state));
     window.present();
 }
 
