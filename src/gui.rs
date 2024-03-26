@@ -1,8 +1,8 @@
 use crate::colorings::ColorInfo;
-use crate::mandel_image::{make_mandel_image, Mapping, WinToMandel};
+use crate::image::Image;
+use crate::mandel_image::{get_mandel_image, Mapping, WinToMandel};
 use crate::presets::Presets;
-use crate::MandelReq;
-use gtk::cairo::ImageSurface;
+use crate::{MandelReply, MandelReq, IMG_FMT};
 use gtk::ffi::GTK_INVALID_LIST_POSITION;
 use gtk::glib::{clone, WeakRef};
 use gtk::{
@@ -17,7 +17,7 @@ const WIN_SZ0: i32 = 600;
 
 struct State {
     mparams: Mapping,
-    img: Option<ImageSurface>,
+    img: Option<Image>,
     col_idx: usize,
     preset: Option<u8>,
     color_info: ColorInfo,
@@ -49,7 +49,7 @@ fn mandel_draw(
     _h: i32,
 ) {
     if let Some(img) = &state.borrow().img {
-        ctxt.set_source_surface(img, 0.0, 0.0)
+        ctxt.set_source_surface(img.surface(), 0.0, 0.0)
             .expect("Expected to be able to set source surface");
         ctxt.paint().unwrap();
     }
@@ -64,8 +64,19 @@ fn expect_float_value(e: &gtk::Entry) -> Option<f64> {
     }
 }
 
-fn handle_new_image(reply: Option<ImageSurface>, state: &mut State) {
-    state.img = reply;
+fn handle_new_image(reply: MandelReply, state: &mut State) {
+    match reply.result {
+        Some(data) => {
+            state.img = Some(Image::new(
+                data,
+                IMG_FMT,
+                reply.width,
+                reply.height,
+                reply.stride,
+            ));
+        }
+        None => state.img = None,
+    }
     if let Some(canvas) = state.canvas.upgrade() {
         canvas.queue_draw();
     }
@@ -73,11 +84,11 @@ fn handle_new_image(reply: Option<ImageSurface>, state: &mut State) {
 
 fn recompute_image(state: &mut State) {
     let coloring = state.color_info.producer(state.col_idx);
-    let request = MandelReq {
+    let request: MandelReq = MandelReq {
         params: state.mparams.clone(),
         coloring,
     };
-    let reply = make_mandel_image(&request);
+    let reply = get_mandel_image(&request);
     handle_new_image(reply, state);
 }
 

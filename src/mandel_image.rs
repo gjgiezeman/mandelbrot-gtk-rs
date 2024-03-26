@@ -1,6 +1,4 @@
-use gtk::cairo::ImageSurface;
-
-use crate::{colorings::ColorFromMandel, MandelReq, IMG_FMT};
+use crate::{colorings::ColorFromMandel, MandelReply, MandelReq, IMG_FMT};
 
 #[derive(Clone)]
 /// Parameters for mapping from mandelbrot space to a window
@@ -131,21 +129,34 @@ fn fill_mandel_image(
     }
 }
 
-pub fn make_mandel_image(request: &MandelReq) -> Option<ImageSurface> {
+fn make_mandel_image(request: &MandelReq) -> (Option<Vec<u8>>, i32) {
     if !request.params.is_valid() {
-        return None;
+        return (None, 0);
     }
-    let surface = ImageSurface::create(
-        IMG_FMT,
-        request.params.win_width as i32,
-        request.params.win_height as i32,
-    );
-    if let Ok(mut surface) = surface {
-        let ustride = surface.stride() as usize;
-        if let Ok(mut data) = surface.data() {
-            fill_mandel_image(&mut data, &request.coloring, ustride, &request.params);
+    match IMG_FMT.stride_for_width(request.params.win_width as u32) {
+        Err(_) => (None, 0),
+        Ok(stride) => {
+            let h = request.params.win_height as usize;
+            let ustride = stride as usize;
+            let mut surface: Vec<u8> = vec![0; h * ustride];
+            fill_mandel_image(
+                surface.as_mut(),
+                &request.coloring,
+                ustride,
+                &request.params,
+            );
+            (Some(surface), stride)
         }
-        return Some(surface);
     }
-    None
+}
+
+pub fn get_mandel_image(request: &MandelReq) -> MandelReply {
+    let (data, stride) = make_mandel_image(request);
+    let reply = MandelReply {
+        result: data,
+        width: request.params.win_width as i32,
+        height: request.params.win_height as i32,
+        stride: stride,
+    };
+    reply
 }
