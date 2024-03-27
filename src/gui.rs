@@ -54,19 +54,11 @@ fn build_ui(app: &Application) {
         canvas.set_draw_func(move |d, c, w, h| mandel_draw(&state, d, c, w, h));
     }
 
-    let content_box = gtk::Frame::builder()
-        .child(&canvas)
-        .margin_start(10)
-        .margin_end(10)
-        .margin_top(10)
-        .margin_bottom(10)
-        .build();
-
     // Create a window and set the title
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Mandelbrot")
-        .child(&content_box)
+        .child(&canvas)
         .build();
     set_image(&mut state.borrow_mut());
     window.present();

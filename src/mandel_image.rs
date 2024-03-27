@@ -140,8 +140,11 @@ pub fn make_mandel_image(params: &Mapping) -> Option<ImageSurface> {
     let surface = ImageSurface::create(IMG_FMT, params.win_width as i32, params.win_height as i32);
     if let Ok(mut surface) = surface {
         let ustride = surface.stride() as usize;
-        if let Ok(mut data) = surface.data() {
-            fill_mandel_image(&mut data, ustride, &params);
+        match surface.data() {
+            Ok(mut data) => {
+                fill_mandel_image(&mut data, ustride, params);
+            }
+            Err(_) => return None,
         }
         return Some(surface);
     }
