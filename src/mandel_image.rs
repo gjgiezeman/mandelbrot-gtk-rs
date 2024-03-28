@@ -84,14 +84,16 @@ impl WinToMandel {
     }
 }
 
-pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
+// Return the number of iterations before we encounter the stop criterion
+fn mandel_value(x: f64, y: f64, max_iter: u32) -> u32 {
+    // The number of iterations
     let mut iter = 0;
-    let mut r = 0.0;
-    let mut i = 0.0;
-    while iter < max {
-        let rnext = r * r - i * i + x;
-        i = 2.0 * r * i + y;
-        r = rnext;
+    // The initial values of r and i.
+    let (mut r, mut i) = (0.0, 0.0);
+    while iter < max_iter {
+        // Compute the new values for r and i
+        (r, i) = (r * r - i * i + x, 2.0 * r * i + y);
+        // The stop criterion
         if i * i + r * r >= 4.0 {
             break;
         }
@@ -100,6 +102,7 @@ pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
     iter
 }
 
+// Return black for an even value, white for an odd value.
 fn color_from_mandel(mv: u32) -> u32 {
     if mv % 2 == 0 {
         0
@@ -108,6 +111,8 @@ fn color_from_mandel(mv: u32) -> u32 {
     }
 }
 
+// Fill the bytes of an image with the mandelbrot image according to the parameters.
+// Each row of the image contains ustride bytes.
 fn fill_mandel_image(data: &mut [u8], ustride: usize, mparams: &Mapping) {
     {
         let converter = WinToMandel::from_mapping(mparams);
@@ -133,15 +138,21 @@ fn fill_mandel_image(data: &mut [u8], ustride: usize, mparams: &Mapping) {
     }
 }
 
+// Make an ImageSurface and fill it with a mandelbrot image, according to the parameters.
 pub fn make_mandel_image(params: &Mapping) -> Option<ImageSurface> {
     if !params.is_valid() {
         return None;
     }
+    // Create an image of the requested size.
     let surface = ImageSurface::create(IMG_FMT, params.win_width as i32, params.win_height as i32);
     if let Ok(mut surface) = surface {
+        // Get the size in bytes of one row
         let ustride = surface.stride() as usize;
-        if let Ok(mut data) = surface.data() {
-            fill_mandel_image(&mut data, ustride, &params);
+        match surface.data() {
+            Ok(mut data) => {
+                fill_mandel_image(&mut data, ustride, params);
+            }
+            Err(_) => return None,
         }
         return Some(surface);
     }
