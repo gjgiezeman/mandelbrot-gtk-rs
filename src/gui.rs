@@ -5,13 +5,7 @@ use gtk::{glib, prelude::*, Application, ApplicationWindow, DrawingArea};
 const APP_ID: &str = "nl.uu.gjgiezeman.mandelbrot";
 const WIN_SZ0: usize = 600;
 
-fn mandel_draw(
-    img: &Option<ImageSurface>,
-    _da: &DrawingArea,
-    ctxt: &gtk::cairo::Context,
-    _w: i32,
-    _h: i32,
-) {
+fn mandel_draw(img: &Option<ImageSurface>, ctxt: &gtk::cairo::Context) {
     if let Some(img) = img {
         ctxt.set_source_surface(img, 0.0, 0.0)
             .expect("Expected to be able to set source surface");
@@ -25,9 +19,8 @@ fn build_ui(app: &Application) {
         .content_width(WIN_SZ0 as i32)
         .build();
     let image = make_mandel_image(&Mapping::new_for_size(WIN_SZ0));
-    canvas.set_draw_func(move |d, c, w, h| mandel_draw(&image, d, c, w, h));
+    canvas.set_draw_func(move |_d, ctxt, _w, _h| mandel_draw(&image, ctxt));
 
-    // Create a window and set the title
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Mandelbrot")
