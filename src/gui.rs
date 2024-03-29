@@ -9,14 +9,14 @@ const APP_ID: &str = "nl.uu.gjgiezeman.mandelbrot";
 const WIN_SZ0: usize = 600;
 
 struct State {
-    mparams: Mapping,
+    mapping: Mapping,
     img: Option<ImageSurface>,
 }
 
 impl State {
     fn new() -> State {
         State {
-            mparams: Mapping::new_for_size(WIN_SZ0),
+            mapping: Mapping::new_for_size(WIN_SZ0),
             img: None,
         }
     }
@@ -30,18 +30,11 @@ fn mandel_draw(state: &Rc<RefCell<State>>, ctxt: &gtk::cairo::Context) {
     }
 }
 
-fn recompute_image(state: &mut State) {
-    let img = make_mandel_image(&state.mparams);
-    state.img = img;
-}
-
 fn on_resize(state: &Rc<RefCell<State>>, w: i32, h: i32) {
-    {
-        let mut s = state.borrow_mut();
-        s.mparams.win_width = w as usize;
-        s.mparams.win_height = h as usize;
-        recompute_image(&mut s);
-    }
+    let mut s = state.borrow_mut();
+    s.mapping.win_width = w as usize;
+    s.mapping.win_height = h as usize;
+    s.img = make_mandel_image(&s.mapping);
 }
 
 fn build_ui(app: &Application) {
