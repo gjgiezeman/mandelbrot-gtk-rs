@@ -17,6 +17,10 @@ fn build_ui(app: &Application) {
     let canvas = DrawingArea::builder()
         .content_height(WIN_SZ0 as i32)
         .content_width(WIN_SZ0 as i32)
+        .margin_start(10)
+        .margin_end(10)
+        .margin_top(10)
+        .margin_bottom(10)
         .build();
     let image = make_mandel_image(&Mapping::new_for_size(WIN_SZ0));
     canvas.set_draw_func(move |_d, ctxt, _w, _h| mandel_draw(&image, ctxt));
