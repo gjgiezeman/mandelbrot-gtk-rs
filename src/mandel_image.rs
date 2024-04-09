@@ -1,4 +1,4 @@
-use crate::{colorings::ColorFromMandel, MandelReply, MandelReq, IMG_FMT};
+use crate::{colorings::Coloring, IMG_FMT};
 
 #[derive(Clone)]
 /// Parameters for mapping from mandelbrot space to a window
@@ -57,7 +57,6 @@ The solution is:
 f = s
 x0 = x_c - (f*w)/2
 y0 = y_c - (f*h)/2
-
  */
 pub struct WinToMandel {
     x0: f64,
@@ -83,14 +82,16 @@ impl WinToMandel {
     }
 }
 
-pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
+// Return the number of iterations before we encounter the stop criterion
+fn mandel_value(x: f64, y: f64, max_iter: u32) -> u32 {
+    // The number of iterations
     let mut iter = 0;
-    let mut r = 0.0;
-    let mut i = 0.0;
-    while iter < max {
-        let rnext = r * r - i * i + x;
-        i = 2.0 * r * i + y;
-        r = rnext;
+    // The initial values of r and i.
+    let (mut r, mut i) = (0.0, 0.0);
+    while iter < max_iter {
+        // Compute the new values for r and i
+        (r, i) = (r * r - i * i + x, 2.0 * r * i + y);
+        // The stop criterion
         if i * i + r * r >= 4.0 {
             break;
         }
@@ -99,11 +100,13 @@ pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
     iter
 }
 
+// Fill the bytes of an image with the mandelbrot image according to the parameters.
+// Each row of the image contains ustride bytes.
 fn fill_mandel_image(
     data: &mut [u8],
-    col_producer: &Box<dyn ColorFromMandel>,
     ustride: usize,
     mparams: &Mapping,
+    col_producer: &Box<dyn Coloring>,
 ) {
     {
         let converter = WinToMandel::from_mapping(mparams);
@@ -117,7 +120,7 @@ fn fill_mandel_image(
             for wx in 0..w {
                 let x = converter.cvt_x(wx);
                 let mv = mandel_value(x, y, max);
-                let color = col_producer.get(mv, max);
+                let color = col_producer.get_color(mv, max);
                 let bytes = color.to_ne_bytes();
                 for i in 0..bytes.len() {
                     if let Some(v) = iter.next() {
@@ -129,34 +132,22 @@ fn fill_mandel_image(
     }
 }
 
-fn make_mandel_image(request: &MandelReq) -> (Option<Vec<u8>>, i32) {
-    if !request.params.is_valid() {
-        return (None, 0);
+// Make an Vec<u8> and fill it with a mandelbrot image, according to the parameters.
+pub fn make_mandel_image(
+    params: &Mapping,
+    col_producer: &Box<dyn Coloring>,
+) -> Option<(Vec<u8>, i32)> {
+    if !params.is_valid() {
+        return None;
     }
-    match IMG_FMT.stride_for_width(request.params.win_width as u32) {
-        Err(_) => (None, 0),
+    match IMG_FMT.stride_for_width(params.win_width as u32) {
+        Err(_) => None,
         Ok(stride) => {
-            let h = request.params.win_height as usize;
+            let h = params.win_height as usize;
             let ustride = stride as usize;
             let mut surface: Vec<u8> = vec![0; h * ustride];
-            fill_mandel_image(
-                surface.as_mut(),
-                &request.coloring,
-                ustride,
-                &request.params,
-            );
-            (Some(surface), stride)
+            fill_mandel_image(surface.as_mut(), ustride, params, col_producer);
+            Some((surface, stride))
         }
     }
-}
-
-pub fn get_mandel_image(request: &MandelReq) -> MandelReply {
-    let (data, stride) = make_mandel_image(request);
-    let reply = MandelReply {
-        result: data,
-        width: request.params.win_width as i32,
-        height: request.params.win_height as i32,
-        stride: stride,
-    };
-    reply
 }
