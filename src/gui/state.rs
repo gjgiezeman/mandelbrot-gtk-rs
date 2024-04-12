@@ -113,18 +113,11 @@ impl State {
         };
         let _ = self.req_sender.send_blocking(request);
     }
-    fn block_recompute(&mut self) {
-        self.block = true;
-    }
-    fn unblock_and_recompute(&mut self) {
-        self.block = false;
-        self.recompute_image();
-    }
 }
 
 #[must_use = "if unused would redraw without postponing anything"]
 pub fn postpone_redraw(state: &Rc<RefCell<State>>) -> PostponedRedraw {
-    state.borrow_mut().block_recompute();
+    state.borrow_mut().block = true;
     PostponedRedraw {
         state: state.clone(),
     }
@@ -137,6 +130,8 @@ pub struct PostponedRedraw {
 
 impl Drop for PostponedRedraw {
     fn drop(&mut self) {
-        self.state.borrow_mut().unblock_and_recompute();
+        let mut state = self.state.borrow_mut();
+        state.block = false;
+        state.recompute_image();
     }
 }
