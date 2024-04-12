@@ -27,14 +27,15 @@ impl Preset {
         self.iter_depth as f64
     }
 }
+
 pub struct Presets {
-    names: [&'static str; 3],
+    names: Vec<&'static str>,
     values: Vec<Preset>,
 }
 
 impl Presets {
     pub fn new() -> Presets {
-        let names = ["Initial", "Flamenco", "Spiral"];
+        let names = vec!["Initial", "Flamenco", "Spiral"];
         let values = vec![
             Preset::new(0.0, 0.0, 0, 100),
             Preset::new(-1.7665088674631104, 0.04172334239500609, 750, 1000),

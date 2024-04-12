@@ -7,6 +7,7 @@ pub struct Image {
 
 impl Image {
     pub fn new(mut data: Vec<u8>, format: Format, width: i32, height: i32, stride: i32) -> Image {
+        assert!(data.len() >= height as usize * stride as usize);
         let surface;
         unsafe {
             surface = ImageSurface::create_for_data_unsafe(

@@ -1,7 +1,6 @@
 use std::thread;
 
-use crate::{colorings::ColorFromMandel, MandelReply, MandelReq, IMG_FMT};
-//use gtk::glib::ThreadPool;
+use crate::{colorings::Coloring, MandelReply, MandelReq, IMG_FMT};
 use scoped_threadpool::Pool;
 
 #[derive(Clone)]
@@ -61,7 +60,6 @@ The solution is:
 f = s
 x0 = x_c - (f*w)/2
 y0 = y_c - (f*h)/2
-
  */
 pub struct WinToMandel {
     x0: f64,
@@ -70,10 +68,10 @@ pub struct WinToMandel {
 }
 
 impl WinToMandel {
-    pub fn from_mapping(mapping_params: &Mapping) -> WinToMandel {
-        let f = mapping_params.scale;
-        let x0: f64 = mapping_params.cx - (f * mapping_params.win_width as f64) / 2.0;
-        let y0 = mapping_params.cy + (f * mapping_params.win_height as f64) / 2.0;
+    pub fn from_mapping(mapping: &Mapping) -> WinToMandel {
+        let f = mapping.scale;
+        let x0: f64 = mapping.cx - (f * mapping.win_width as f64) / 2.0;
+        let y0 = mapping.cy + (f * mapping.win_height as f64) / 2.0;
         WinToMandel { x0, y0, f }
     }
     pub fn cvt(&self, wx: usize, wy: usize) -> (f64, f64) {
@@ -87,14 +85,16 @@ impl WinToMandel {
     }
 }
 
-pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
+// Return the number of iterations before we encounter the stop criterion
+fn mandel_value(x: f64, y: f64, max_iter: u32) -> u32 {
+    // The number of iterations
     let mut iter = 0;
-    let mut r = 0.0;
-    let mut i = 0.0;
-    while iter < max {
-        let rnext = r * r - i * i + x;
-        i = 2.0 * r * i + y;
-        r = rnext;
+    // The initial values of r and i.
+    let (mut r, mut i) = (0.0, 0.0);
+    while iter < max_iter {
+        // Compute the new values for r and i
+        (r, i) = (r * r - i * i + x, 2.0 * r * i + y);
+        // The stop criterion
         if i * i + r * r >= 4.0 {
             break;
         }
@@ -105,7 +105,7 @@ pub fn mandel_value(x: f64, y: f64, max: u32) -> u32 {
 
 fn fill_mandel_image_partial(
     data: &mut [u8],
-    col_producer: &Box<dyn ColorFromMandel>,
+    col_producer: &Box<dyn Coloring>,
     converter: &WinToMandel,
     w: usize,
     h_start: usize,
@@ -121,7 +121,7 @@ fn fill_mandel_image_partial(
             for wx in 0..w {
                 let x = converter.cvt_x(wx);
                 let mv = mandel_value(x, y, max);
-                let bytes = col_producer.get(mv, max).to_ne_bytes();
+                let bytes = col_producer.get_color(mv, max).to_ne_bytes();
                 for i in 0..bytes.len() {
                     if let Some(v) = iter.next() {
                         *v = bytes[i];
@@ -133,47 +133,40 @@ fn fill_mandel_image_partial(
     }
 }
 
-fn fill_mandel_image(
-    data: &mut [u8],
-    col_producer: &Box<dyn ColorFromMandel>,
-    w: usize,
-    h: usize,
-    max: u32,
-    ustride: usize,
-    mparams: &Mapping,
-) -> bool {
-    let converter = WinToMandel::from_mapping(mparams);
-    fill_mandel_image_partial(data, col_producer, &converter, w, 0, h, max, ustride)
+// Divide h in par_count parts which are almost equal (difference of 1 allowed)
+// Includes 0 but excludes h
+// e.g. compute_splits(7,3) -> [0,3,5]
+fn compute_splits(h: usize, par_count: usize) -> Vec<usize> {
+    let h_step = h / par_count;
+    let h_extra = h % par_count;
+    let mut splits = Vec::with_capacity(par_count - 1);
+    let mut split = 0;
+    for _i in 0..h_extra {
+        splits.push(split);
+        split += h_step + 1;
+    }
+    for _i in h_extra..par_count {
+        splits.push(split);
+        split += h_step;
+    }
+    splits
 }
 
 fn fill_mandel_image_parallel(
     pool: &mut Pool,
     data: &mut [u8],
-    col_producer: &Box<dyn ColorFromMandel>,
-    w: usize,
-    h: usize,
-    max: u32,
+    col_producer: &Box<dyn Coloring>,
     ustride: usize,
-    mparams: &Mapping,
+    mapping: &Mapping,
 ) -> bool {
-    let converter = WinToMandel::from_mapping(mparams);
+    let converter = WinToMandel::from_mapping(mapping);
+    let w = mapping.win_width;
+    let h = mapping.win_height;
+    let max = mapping.iteration_depth;
     let par_count = pool.thread_count() as usize;
-
-    let h_step = h / par_count;
-    let mut h_extra = h % par_count;
-    let mut splits = Vec::with_capacity(par_count - 1);
-    let mut split = 0;
-    for _i in 0..par_count {
-        splits.push(split);
-        if h_extra > 0 {
-            split += h_step + 1;
-            h_extra -= 1;
-        } else {
-            split += h_step;
-        }
-    }
+    let mut splits = compute_splits(h, par_count);
     let mut end = h;
-    let mut statuses = vec![true; 8];
+    let mut statuses = vec![true; par_count];
     pool.scoped(|scope| {
         let mut data = data;
         let mut statuses = &mut statuses[..];
@@ -205,68 +198,46 @@ fn fill_mandel_image_parallel(
     true
 }
 
-fn make_mandel_image(request: &mut MandelReq, pool: &mut Pool) -> (Option<Vec<u8>>, i32) {
-    if !request.params.is_valid() {
-        return (None, 0);
+// Make an Vec<u8> and fill it with a mandelbrot image, according to the parameters.
+pub fn make_mandel_image(
+    mapping: &Mapping,
+    col_producer: &Box<dyn Coloring>,
+    pool: &mut Pool,
+) -> Option<(Vec<u8>, i32)> {
+    if !mapping.is_valid() {
+        return None;
     }
-
-    match IMG_FMT.stride_for_width(request.params.win_width as u32) {
-        Err(_) => {
-            return (None, 0);
-        }
+    match IMG_FMT.stride_for_width(mapping.win_width as u32) {
+        Err(_) => None,
         Ok(stride) => {
-            let w = request.params.win_width as usize;
-            let h = request.params.win_height as usize;
+            let h = mapping.win_height as usize;
             let ustride = stride as usize;
-            let max = request.params.iteration_depth;
             let mut surface: Vec<u8> = vec![0; h * ustride];
-            let success = if h >= pool.thread_count() as usize {
-                fill_mandel_image_parallel(
-                    pool,
-                    surface.as_mut(),
-                    &request.coloring,
-                    w,
-                    h,
-                    max,
-                    ustride,
-                    &request.params,
-                )
+            if fill_mandel_image_parallel(pool, surface.as_mut(), col_producer, ustride, mapping) {
+                Some((surface, stride))
             } else {
-                fill_mandel_image(
-                    surface.as_mut(),
-                    &request.coloring,
-                    w,
-                    h,
-                    max,
-                    ustride,
-                    &request.params,
-                )
-            };
-            if success {
-                return (Some(surface), stride);
-            } else {
-                return (None, 0);
+                None
             }
         }
     }
 }
 
-fn replace_by_last_request(
-    available: &mut Option<MandelReq>,
+fn last_request(
+    mut request: MandelReq,
     req_receiver: &async_channel::Receiver<MandelReq>,
-) {
+) -> MandelReq {
     loop {
         // If there are multiple requests, throw away all but the last
         match req_receiver.try_recv() {
-            Ok(new_req) => {
-                available.replace(new_req);
+            Ok(new_request) => {
+                request = new_request;
             }
-            Err(_) => break,
+            Err(_) => return request,
         }
     }
 }
 
-pub fn producer(
+pub fn mandel_producer(
     req_receiver: async_channel::Receiver<MandelReq>,
     reply_sender: async_channel::Sender<MandelReply>,
 ) {
@@ -277,25 +248,24 @@ pub fn producer(
     }
     eprintln!("Parallelism is {}", par_count);
     let mut pool = Pool::new(par_count as u32);
-    let mut available = None;
     loop {
-        if available.is_none() {
-            match req_receiver.recv_blocking() {
-                Err(_) => break,
-                Ok(request) => {
-                    available = Some(request);
-                }
+        let mut request;
+        match req_receiver.recv_blocking() {
+            Err(_) => break,
+            Ok(new_request) => {
+                request = new_request;
             }
         }
-        replace_by_last_request(&mut available, &req_receiver);
-        // available is guaranteed to be is_some, hence unwrap is safe.
-        let mut request = available.take().unwrap();
-        let (data, stride) = make_mandel_image(&mut request, &mut pool);
-        let _ = reply_sender.send_blocking(MandelReply {
-            result: data,
-            width: request.params.win_width as i32,
-            height: request.params.win_height as i32,
-            stride: stride,
-        });
+        request = last_request(request, &req_receiver);
+        if let Some((data, stride)) =
+            make_mandel_image(&request.mapping, &request.coloring, &mut pool)
+        {
+            let _ = reply_sender.send_blocking(MandelReply {
+                data,
+                width: request.mapping.win_width as i32,
+                height: request.mapping.win_height as i32,
+                stride,
+            });
+        }
     }
 }
