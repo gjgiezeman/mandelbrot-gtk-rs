@@ -1,13 +1,14 @@
-use crate::colorings::ColorInfo;
+mod state;
+
 use crate::image::Image;
-use crate::mandel_image::{mandel_producer, Mapping, WinToMandel};
+use crate::mandel_image::mandel_producer;
 use crate::presets::Presets;
-use crate::{MandelReply, MandelReq, IMG_FMT};
-use async_channel::{Receiver, Sender};
+use crate::{MandelReply, IMG_FMT};
+use async_channel::Receiver;
 use gtk::ffi::GTK_INVALID_LIST_POSITION;
 use gtk::gdk::ffi::GDK_BUTTON_PRIMARY;
+use gtk::glib::clone;
 use gtk::glib::object::Cast;
-use gtk::glib::{clone, WeakRef};
 use gtk::{
     gio, glib, prelude::*, Adjustment, Application, ApplicationWindow, Button, DrawingArea,
     DropDown, GestureClick, Label, ListItem, ListView, Orientation, Scale, SignalListItemFactory,
@@ -16,68 +17,13 @@ use gtk::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use self::state::{postpone_redraw, State};
+
 const APP_ID: &str = "nl.uu.gjgiezeman.mandelbrot";
 const WIN_SZ0: usize = 600;
 
-struct State {
-    mapping: Mapping,
-    img: Option<Image>,
-    col_idx: usize,
-    color_info: ColorInfo,
-    preset: Option<u8>,
-    req_sender: Sender<MandelReq>,
-    canvas: WeakRef<DrawingArea>,
-    block: bool,
-}
-
-impl State {
-    fn new(req_sender: Sender<MandelReq>) -> State {
-        State {
-            mapping: Mapping::new_for_size(WIN_SZ0),
-            img: None,
-            col_idx: 0,
-            color_info: ColorInfo::new(),
-            preset: None,
-            req_sender,
-            canvas: WeakRef::new(),
-            block: false,
-        }
-    }
-    fn win_to_mandel(&self, wx: f64, wy: f64) -> (f64, f64) {
-        WinToMandel::from_mapping(&self.mapping).cvt(wx as usize, wy as usize)
-    }
-    fn recompute_image(&mut self) {
-        if self.block {
-            return;
-        }
-        let coloring = self.color_info.scheme(self.col_idx).clone();
-        let request = MandelReq {
-            mapping: self.mapping.clone(),
-            coloring,
-        };
-        let _ = self.req_sender.send_blocking(request);
-    }
-    fn block_recompute(&mut self) {
-        self.block = true;
-    }
-    fn unblock_and_recompute(&mut self) {
-        self.block = false;
-        self.recompute_image();
-    }
-    fn on_resize(&mut self, w: i32, h: i32) {
-        self.mapping.win_width = w as usize;
-        self.mapping.win_height = h as usize;
-        self.recompute_image();
-    }
-    fn iter_depth_changed(&mut self, adj: &Adjustment) {
-        let iter_depth = adj.value() as u32;
-        self.mapping.iteration_depth = iter_depth;
-        self.recompute_image();
-    }
-}
-
 fn mandel_draw(state: &Rc<RefCell<State>>, ctxt: &gtk::cairo::Context) {
-    if let Some(img) = &state.borrow().img {
+    if let Some(img) = &state.borrow().img() {
         ctxt.set_source_surface(img.surface(), 0.0, 0.0)
             .expect("Expected to be able to set source surface");
         ctxt.paint().unwrap();
@@ -93,52 +39,17 @@ fn expect_float_value(e: &gtk::Entry) -> Option<f64> {
     }
 }
 
-fn cx_changed(state: &mut State, e: &gtk::Entry) {
-    if let Some(value) = expect_float_value(e) {
-        state.mapping.cx = value;
-        state.recompute_image();
-    }
-}
-
-fn cy_changed(state: &mut State, e: &gtk::Entry) {
-    if let Some(value) = expect_float_value(e) {
-        state.mapping.cy = value;
-        state.recompute_image();
-    }
-}
-
-fn col_changed(state: &mut State, dd: &DropDown) {
+fn color_changed(state: &mut State, dd: &DropDown) {
     let sel = dd.selected();
     if sel != GTK_INVALID_LIST_POSITION {
-        state.col_idx = sel as usize;
-        state.recompute_image();
-    }
-}
-
-fn zoom_changed(state: &mut State, adj: &Adjustment) {
-    let zoom = adj.value();
-    // The value is chosen such that floating point approximation becomes clear near zoom == 1000
-    let scale = 1.035_f64.powf(-zoom);
-    state.mapping.scale = 4.0 * scale / WIN_SZ0 as f64;
-    state.recompute_image();
-}
-
-fn handle_new_image(reply: MandelReply, state: &mut State) {
-    state.img = Some(Image::new(
-        reply.data,
-        IMG_FMT,
-        reply.width,
-        reply.height,
-        reply.stride,
-    ));
-    if let Some(canvas) = state.canvas.upgrade() {
-        canvas.queue_draw();
+        state.set_col_idx(sel as usize);
     }
 }
 
 async fn new_image_handler(reply_receiver: Receiver<MandelReply>, state: Rc<RefCell<State>>) {
     while let Ok(reply) = reply_receiver.recv().await {
-        handle_new_image(reply, &mut state.borrow_mut());
+        let img = Image::new(reply.data, IMG_FMT, reply.width, reply.height, reply.stride);
+        state.borrow_mut().set_img(img);
     }
 }
 
@@ -151,11 +62,10 @@ fn on_clicked(
     cy_value: &gtk::Entry,
 ) {
     gesture.set_state(gtk::EventSequenceState::Claimed);
-    state.borrow_mut().block_recompute();
+    let _late_redraw = postpone_redraw(state);
     let (new_cx, new_cy) = state.borrow().win_to_mandel(wx, wy);
     cx_value.set_text(&new_cx.to_string());
     cy_value.set_text(&new_cy.to_string());
-    state.borrow_mut().unblock_and_recompute();
 }
 
 fn preset_ready(
@@ -166,8 +76,8 @@ fn preset_ready(
     iter_adj: &Adjustment,
     presets: &Presets,
 ) {
-    let preset = state.borrow_mut().preset.take();
-    state.borrow_mut().block_recompute();
+    let preset = state.borrow_mut().take_preset();
+    let _delayed_redraw = postpone_redraw(state);
     if let Some(preset) = preset {
         let preset = presets.get(preset as usize);
         cx_value.set_text(&preset.cx().to_string());
@@ -175,7 +85,6 @@ fn preset_ready(
         zoom_adj.set_value(preset.zoom());
         iter_adj.set_value(preset.iter_depth());
     }
-    state.borrow_mut().unblock_and_recompute();
 }
 
 fn preset_setup(_fac: &SignalListItemFactory, item: &ListItem) {
@@ -231,12 +140,12 @@ fn build_preset_window(state: &Rc<RefCell<State>>, presets: &Presets) -> Window 
         .child(&content_box)
         .build();
     cancel_btn.connect_clicked(clone!(@weak win, @strong state => move |_| {
-        state.borrow_mut().preset=None;
+        state.borrow_mut().set_preset(None);
         win.set_visible(false);
     }));
     ok_btn.connect_clicked(clone!(@weak win, @strong state => move |_| {
         let sel = preset_list.selected();
-        state.borrow_mut().preset=Some(sel as u8);
+        state.borrow_mut().set_preset(Some(sel as u8));
         win.set_visible(false);
     }));
     win
@@ -255,14 +164,10 @@ fn build_ui(app: &Application) {
     gio::spawn_blocking(move || mandel_producer(req_receiver, reply_sender));
     let state = Rc::new(RefCell::new(State::new(req_sender)));
     let colorings;
-    {
-        let state = state.borrow();
-        let names: Vec<&str> = state.color_info.names_iter().collect();
-        colorings = DropDown::from_strings(&names);
-    }
+    colorings = DropDown::from_strings(&state.borrow().coloring_names());
     colorings.set_width_request(120);
     colorings.set_margin_end(15);
-    let iter_val = state.borrow().mapping.iteration_depth as f64;
+    let iter_val = state.borrow().iter_depth();
     let iter_adj = Adjustment::new(iter_val, 10.0, 1000.0, 1.0, 0.0, 0.0);
     let iteration_button = SpinButton::builder().adjustment(&iter_adj).build();
     let preset_btn = Button::builder()
@@ -276,12 +181,12 @@ fn build_ui(app: &Application) {
     first_row.append(&iteration_button);
     first_row.append(&preset_btn);
     let cx_value = gtk::Entry::builder()
-        .text(&state.borrow().mapping.cx.to_string())
+        .text(&state.borrow().cx().to_string())
         .width_chars(15)
         .margin_end(10)
         .build();
     let cy_value = gtk::Entry::builder()
-        .text(&state.borrow().mapping.cy.to_string())
+        .text(&state.borrow().cy().to_string())
         .width_chars(15)
         .build();
     let second_row = make_row_box();
@@ -300,7 +205,7 @@ fn build_ui(app: &Application) {
         .content_width(WIN_SZ0 as i32)
         .vexpand(true)
         .build();
-    state.borrow_mut().canvas = canvas.downgrade();
+    state.borrow_mut().set_canvas(canvas.downgrade());
     let content_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(5)
@@ -330,25 +235,25 @@ fn build_ui(app: &Application) {
     // Set actions
     canvas.set_draw_func(clone!(@strong state =>move |_d, ctxt, _w, _h| mandel_draw(&state, ctxt)));
     iter_adj.connect_value_changed(clone!(@strong state => move |a| {
-        state.borrow_mut().iter_depth_changed(a);
+        state.borrow_mut().set_iter_depth(a.value());
     }));
     preset_btn
         .connect_clicked(clone!(@strong preset_window => move |_btn| preset_window.present();));
     cx_value.connect_changed(
-        clone!(@strong state => move |e| { cx_changed(&mut state.borrow_mut(), e);}),
+        clone!(@strong state => move |e| { state.borrow_mut().set_cx(expect_float_value(e));}),
     );
     cy_value.connect_changed(
-        clone!(@strong state => move |e| { cy_changed(&mut state.borrow_mut(), e);}),
+        clone!(@strong state => move |e| { state.borrow_mut().set_cy(expect_float_value(e));}),
     );
     let gesture = gtk::GestureClick::new();
     gesture.set_button(GDK_BUTTON_PRIMARY as u32);
     gesture.connect_pressed(clone!(@strong state => move |gesture, _, wx, wy| on_clicked(&state, gesture, wx, wy, &cx_value, &cy_value)));
     canvas.add_controller(gesture);
     colorings.connect_selected_notify(clone!(@strong state => move |dd| {
-        col_changed(&mut state.borrow_mut(), dd);
+        color_changed(&mut state.borrow_mut(), dd);
     }));
     zoom_adj.connect_value_changed(clone!(@strong state => move |adj| {
-        zoom_changed(&mut state.borrow_mut(), adj);
+        state.borrow_mut().set_zoom(adj.value());
     }));
     canvas.connect_resize(
         clone!(@strong state => move |_da, w, h| state.borrow_mut().on_resize(w, h)),
