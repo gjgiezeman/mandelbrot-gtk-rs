@@ -114,6 +114,7 @@ fn fill_mandel_image_partial(
     ustride: usize,
 ) -> bool {
     {
+        let mut ok = true;
         for dy in 0..(h_end - h_start) {
             let y = converter.cvt_y(h_start + dy);
             let line = &mut data[dy * ustride..(dy + 1) * ustride];
@@ -125,11 +126,13 @@ fn fill_mandel_image_partial(
                 for i in 0..bytes.len() {
                     if let Some(v) = iter.next() {
                         *v = bytes[i];
+                    } else {
+                        ok = false;
                     }
                 }
             }
         }
-        return true;
+        return ok;
     }
 }
 
@@ -139,7 +142,7 @@ fn fill_mandel_image_partial(
 fn compute_splits(h: usize, par_count: usize) -> Vec<usize> {
     let h_step = h / par_count;
     let h_extra = h % par_count;
-    let mut splits = Vec::with_capacity(par_count - 1);
+    let mut splits = Vec::with_capacity(par_count);
     let mut split = 0;
     for _i in 0..h_extra {
         splits.push(split);
@@ -167,6 +170,7 @@ fn fill_mandel_image_parallel(
     let mut splits = compute_splits(h, par_count);
     let mut end = h;
     let mut statuses = vec![true; par_count];
+    debug_assert_eq!(statuses.len(), splits.len());
     pool.scoped(|scope| {
         let mut data = data;
         let mut statuses = &mut statuses[..];
@@ -190,12 +194,7 @@ fn fill_mandel_image_parallel(
             end = s;
         }
     });
-    for status in statuses {
-        if !status {
-            return false;
-        }
-    }
-    true
+    statuses.into_iter().fold(true, |a, b| a && b)
 }
 
 // Make an Vec<u8> and fill it with a mandelbrot image, according to the parameters.
