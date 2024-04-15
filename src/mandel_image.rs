@@ -172,16 +172,16 @@ fn fill_mandel_image_parallel(
     let mut statuses = vec![true; par_count];
     debug_assert_eq!(statuses.len(), splits.len());
     pool.scoped(|scope| {
-        let mut data = data;
-        let mut statuses = &mut statuses[..];
+        let mut rest_of_data = data;
+        let mut rest_of_statuses = &mut statuses[..];
         while let Some(s) = splits.pop() {
-            let (first_status, last_part);
-            (data, last_part) = data.split_at_mut(ustride * s);
-            (first_status, statuses) = statuses.split_at_mut(1);
+            let (cur_status, cur_data);
+            (rest_of_data, cur_data) = rest_of_data.split_at_mut(ustride * s);
+            (cur_status, rest_of_statuses) = rest_of_statuses.split_at_mut(1);
             let converter_ref = &converter;
             scope.execute(move || {
-                first_status[0] = fill_mandel_image_partial(
-                    last_part,
+                cur_status[0] = fill_mandel_image_partial(
+                    cur_data,
                     col_producer,
                     converter_ref,
                     w,
@@ -197,11 +197,33 @@ fn fill_mandel_image_parallel(
     statuses.into_iter().fold(true, |a, b| a && b)
 }
 
+fn fill_mandel_image(
+    pool: &mut Option<Pool>,
+    data: &mut [u8],
+    col_producer: &Box<dyn Coloring>,
+    ustride: usize,
+    mapping: &Mapping,
+) -> bool {
+    match pool {
+        None => fill_mandel_image_partial(
+            data,
+            col_producer,
+            &WinToMandel::from_mapping(mapping),
+            mapping.win_width,
+            0,
+            mapping.win_height,
+            mapping.iteration_depth,
+            ustride,
+        ),
+        Some(pool) => fill_mandel_image_parallel(pool, data, col_producer, ustride, mapping),
+    }
+}
+
 // Make an Vec<u8> and fill it with a mandelbrot image, according to the parameters.
 pub fn make_mandel_image(
     mapping: &Mapping,
     col_producer: &Box<dyn Coloring>,
-    pool: &mut Pool,
+    pool: &mut Option<Pool>,
 ) -> Option<(Vec<u8>, i32)> {
     if !mapping.is_valid() {
         return None;
@@ -212,7 +234,7 @@ pub fn make_mandel_image(
             let h = mapping.win_height as usize;
             let ustride = stride as usize;
             let mut surface: Vec<u8> = vec![0; h * ustride];
-            if fill_mandel_image_parallel(pool, surface.as_mut(), col_producer, ustride, mapping) {
+            if fill_mandel_image(pool, surface.as_mut(), col_producer, ustride, mapping) {
                 Some((surface, stride))
             } else {
                 None
@@ -246,7 +268,11 @@ pub fn mandel_producer(
         Err(_) => par_count = 8,
     }
     eprintln!("Parallelism is {}", par_count);
-    let mut pool = Pool::new(par_count as u32);
+    let mut pool = if par_count <= 1 {
+        None
+    } else {
+        Some(Pool::new(par_count as u32))
+    };
     loop {
         let mut request;
         match req_receiver.recv_blocking() {
