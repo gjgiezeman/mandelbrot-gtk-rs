@@ -1,6 +1,6 @@
+use gtk::{cairo::ImageSurface, glib, prelude::*, Application, ApplicationWindow, DrawingArea};
+
 use crate::mandel_image::{make_mandel_image, Mapping};
-use gtk::cairo::ImageSurface;
-use gtk::{glib, prelude::*, Application, ApplicationWindow, DrawingArea};
 
 const APP_ID: &str = "nl.uu.gjgiezeman.mandelbrot";
 const WIN_SZ0: usize = 600;
@@ -30,6 +30,7 @@ fn build_ui(app: &Application) {
         .title("Mandelbrot")
         .child(&canvas)
         .build();
+
     window.present();
 }
 
