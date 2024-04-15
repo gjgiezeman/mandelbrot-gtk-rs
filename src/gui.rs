@@ -41,13 +41,6 @@ fn color_changed(state: &mut State, dd: &DropDown) {
     }
 }
 
-/* async fn new_image_handler(reply_receiver: Receiver<MandelReply>, state: Rc<RefCell<State>>) {
-    while let Ok(reply) = reply_receiver.recv().await {
-        let img = Image::new(reply.data, IMG_FMT, reply.width, reply.height, reply.stride);
-        state.borrow_mut().set_img(img);
-    }
-} */
-
 fn on_clicked(
     state: &Rc<RefCell<State>>,
     gesture: &GestureClick,

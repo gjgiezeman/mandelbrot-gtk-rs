@@ -95,14 +95,6 @@ impl State {
     pub fn take_preset(&mut self) -> Option<u8> {
         self.preset.take()
     }
-    /*     fn recompute_image(&mut self) {
-        let coloring = self.color_info.scheme(self.col_idx).clone();
-        let request = MandelReq {
-            mapping: self.mapping.clone(),
-            coloring,
-        };
-        let _ = self.req_sender.send_blocking(request);
-    } */
     fn recompute_image(&mut self) {
         let coloring = self.color_info.scheme(self.col_idx);
         if let Some((img_vec, stride)) = make_mandel_image(&self.mapping, coloring) {
