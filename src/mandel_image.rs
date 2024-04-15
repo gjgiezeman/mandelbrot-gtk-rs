@@ -67,10 +67,10 @@ pub struct WinToMandel {
 }
 
 impl WinToMandel {
-    pub fn from_mapping(mapping_params: &Mapping) -> WinToMandel {
-        let f = mapping_params.scale;
-        let x0: f64 = mapping_params.cx - (f * mapping_params.win_width as f64) / 2.0;
-        let y0 = mapping_params.cy + (f * mapping_params.win_height as f64) / 2.0;
+    pub fn from_mapping(mapping: &Mapping) -> WinToMandel {
+        let f = mapping.scale;
+        let x0: f64 = mapping.cx - (f * mapping.win_width as f64) / 2.0;
+        let y0 = mapping.cy + (f * mapping.win_height as f64) / 2.0;
         WinToMandel { x0, y0, f }
     }
     pub fn cvt(&self, wx: usize, wy: usize) -> (f64, f64) {
@@ -107,14 +107,14 @@ fn mandel_value(x: f64, y: f64, max_iter: u32) -> u32 {
 fn fill_mandel_image(
     data: &mut [u8],
     ustride: usize,
-    mparams: &Mapping,
+    mapping: &Mapping,
     col_producer: &Box<dyn Coloring>,
-) {
+) -> bool {
     {
-        let converter = WinToMandel::from_mapping(mparams);
-        let w = mparams.win_width;
-        let h = mparams.win_height;
-        let max = mparams.iteration_depth;
+        let converter = WinToMandel::from_mapping(mapping);
+        let w = mapping.win_width;
+        let h = mapping.win_height;
+        let max = mapping.iteration_depth;
         for dy in 0..h {
             let y = converter.cvt_y(dy);
             let line = &mut data[dy * ustride..(dy + 1) * ustride];
@@ -127,29 +127,33 @@ fn fill_mandel_image(
                 for i in 0..bytes.len() {
                     if let Some(v) = iter.next() {
                         *v = bytes[i];
+                    } else {
+                        return false;
                     }
                 }
             }
         }
+        true
     }
 }
 
 // Make an ImageSurface and fill it with a mandelbrot image, according to the parameters.
 pub fn make_mandel_image(
-    params: &Mapping,
+    mapping: &Mapping,
     col_producer: &Box<dyn Coloring>,
 ) -> Option<ImageSurface> {
-    if !params.is_valid() {
+    if !mapping.is_valid() {
         return None;
     }
     // Create an image of the requested size.
-    let surface = ImageSurface::create(IMG_FMT, params.win_width as i32, params.win_height as i32);
+    let surface =
+        ImageSurface::create(IMG_FMT, mapping.win_width as i32, mapping.win_height as i32);
     if let Ok(mut surface) = surface {
         // Get the size in bytes of one row
         let ustride = surface.stride() as usize;
         match surface.data() {
             Ok(mut data) => {
-                fill_mandel_image(&mut data, ustride, params, col_producer);
+                fill_mandel_image(&mut data, ustride, mapping, col_producer);
             }
             Err(_) => return None,
         }
